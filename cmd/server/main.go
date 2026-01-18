@@ -1,8 +1,9 @@
 package main
 
 import (
-	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"slices"
 	"sync"
@@ -38,43 +39,61 @@ func handleError(err error, msg string, conn net.Conn) {
 		msg = "something went wrong"
 	}
 	if conn != nil {
-		fmt.Fprintln(conn, msg, err)
+		sendMsg(msg, conn)
 	}
 	fmt.Fprintln(os.Stderr, msg, err)
 }
 
+func handlePacket(conn net.Conn) string {
+	header := make([]byte, 4)
+	_, err := io.ReadFull(conn, header)
+	if err != nil {
+		handleError(err, "", conn)
+	}
+	headerSize := binary.BigEndian.Uint32(header)
+	payload := make([]byte, headerSize)
+	_, err = io.ReadFull(conn, payload)
+	result := string(payload)
+	return result
+}
+
+func sendMsg(msg string, conn net.Conn) error {
+	headerSize := len(msg)
+	header := uint32(headerSize)
+	payload := []byte(msg)
+
+	err := binary.Write(conn, binary.BigEndian, header)
+	err = binary.Write(conn, binary.BigEndian, payload)
+	if err != nil {
+		fmt.Printf("failed to send msg")
+	}
+	return err
+
+}
+
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-	fmt.Fprintln(conn, "200/OK")
-	var name string
-	fmt.Fprintln(conn, "Please put in your name")
-	scanner := bufio.NewScanner(conn)
-	if scanner.Scan() {
-		name = scanner.Text()
-		for name == "" {
-			fmt.Fprintln(conn, "Please put in your name, your name can't be empty")
-			if !scanner.Scan() {
-				return
-			}
-			name = scanner.Text()
 
-		}
+	var name string
+	sendMsg("Please put in your name", conn)
+	name = handlePacket(conn)
+	for name == "" {
+		sendMsg("Please put in your name, your name can't be empty", conn)
+		name = handlePacket(conn)
 	}
+
 	defer handleDisconnect(conn)
-	fmt.Fprintf(conn, "Hello %s \n", name)
+	sendMsg("Hello "+name+"\n", conn)
 	broadcast(name + " joined the chat")
 	newClient := Client{name, conn}
 	clientMu.Lock()
 	clients = append(clients, newClient)
 	clientMu.Unlock()
-	for scanner.Scan() {
-		msg := name + ": " + scanner.Text()
+
+	for {
+		msg := name + ": " + handlePacket(conn)
 		fmt.Fprintln(os.Stdout, msg)
 		broadcast(msg)
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error with %s: %v\n", name, err)
 	}
 }
 
@@ -94,7 +113,7 @@ func broadcast(msg string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	for _, client := range clients {
-		_, err := fmt.Fprintln(client.connection, msg)
+		err := sendMsg(msg, client.connection)
 		if err != nil {
 			fmt.Printf("Broadcast failed for %s, removing them.\n", client.name)
 		}
@@ -108,7 +127,7 @@ func main() {
 	// http.ListenAndServe(":8080", nil)
 	ln, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "something went wrong")
+		fmt.Println("something went wrong")
 	}
 	for {
 		conn, err := ln.Accept()
