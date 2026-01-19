@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"slices"
 	"sync"
-
-	// "net/http"
-	"os"
-	// "github.com/gorilla/websocket"
 )
 
 type Client struct {
@@ -18,17 +15,6 @@ type Client struct {
 	connection net.Conn
 }
 
-// var upgrader = websocket.Upgrader{
-// 	ReadBufferSize:  1024,
-// 	WriteBufferSize: 1024,
-// }
-
-//	func handler(w http.ResponseWriter, r *http.Request) {
-//		w.WriteHeader(http.StatusOK) // Set the status code
-//		fmt.Fprintln(w, "Hello, World!")
-//		fmt.Println(r.RemoteAddr)
-//		fmt.Println(r.Header.Get("X-Forwarded-For"))
-//	}
 var (
 	clients  []Client
 	clientMu sync.Mutex
@@ -49,8 +35,13 @@ func handlePacket(conn net.Conn) string {
 	_, err := io.ReadFull(conn, header)
 	if err != nil {
 		handleError(err, "", conn)
+		return ""
 	}
 	headerSize := binary.BigEndian.Uint32(header)
+	if headerSize > 4*1024*1024 {
+		sendMsg("File too big, please reconnect", conn)
+		return ""
+	}
 	payload := make([]byte, headerSize)
 	_, err = io.ReadFull(conn, payload)
 	result := string(payload)
@@ -65,21 +56,21 @@ func sendMsg(msg string, conn net.Conn) error {
 	err := binary.Write(conn, binary.BigEndian, header)
 	err = binary.Write(conn, binary.BigEndian, payload)
 	if err != nil {
-		fmt.Printf("failed to send msg")
+		fmt.Println("failed to send msg")
 	}
 	return err
 
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn) string {
 	defer conn.Close()
 
 	var name string
 	sendMsg("Please put in your name", conn)
 	name = handlePacket(conn)
-	for name == "" {
-		sendMsg("Please put in your name, your name can't be empty", conn)
-		name = handlePacket(conn)
+	if name == "" {
+		sendMsg("Please put in your name next time, your name can't be empty", conn)
+		return ""
 	}
 
 	defer handleDisconnect(conn)
@@ -91,10 +82,18 @@ func handleConnection(conn net.Conn) {
 	clientMu.Unlock()
 
 	for {
-		msg := name + ": " + handlePacket(conn)
-		fmt.Fprintln(os.Stdout, msg)
+		msg := handlePacket(conn)
+		if msg == "" {
+			break
+		}
+		msg = name + ": " + msg
+		_, err := fmt.Fprintln(os.Stdout, msg)
+		if err != nil {
+			return ""
+		}
 		broadcast(msg)
 	}
+	return ""
 }
 
 func handleDisconnect(conn net.Conn) {
@@ -122,9 +121,7 @@ func broadcast(msg string) {
 }
 
 func main() {
-	// http.HandleFunc("/", handler)
 	fmt.Println("server is serving...")
-	// http.ListenAndServe(":8080", nil)
 	ln, err := net.Listen("tcp", ":8080")
 	if err != nil {
 		fmt.Println("something went wrong")

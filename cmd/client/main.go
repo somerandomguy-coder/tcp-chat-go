@@ -7,13 +7,8 @@ import (
 	"io"
 	"net"
 	"os"
-	// "github.com/gorilla/websocket"
 )
 
-//	var upgrader = websocket.Upgrader{
-//		ReadBufferSize:  1024,
-//		WriteBufferSize: 1024,
-//	}
 func handlePacket(conn net.Conn) string {
 	header := make([]byte, 4)
 	_, err := io.ReadFull(conn, header)
@@ -27,10 +22,10 @@ func handlePacket(conn net.Conn) string {
 	return result
 }
 
-func read_server_msg(conn net.Conn, err error) {
+func read_server_msg(conn net.Conn) {
 	for {
 		line := handlePacket(conn)
-		if err != nil {
+		if line == "" {
 			break
 		}
 		fmt.Println(line)
@@ -61,15 +56,17 @@ func handleError(err error, msg string, conn net.Conn) {
 	fmt.Fprintln(os.Stderr, msg, err)
 }
 
-func send_msg(conn net.Conn, err error) {
-	if err != nil {
-		handleError(err, "", conn)
-	}
+func send_msg(conn net.Conn) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		input := scanner.Text()
-		sendMsg(input, conn)
+		err := sendMsg(input, conn)
+		if err != nil {
+			break
+		}
 	}
+	conn.Close()
+	// should we disconnect?
 }
 
 func main() {
@@ -77,6 +74,6 @@ func main() {
 	if err != nil {
 		fmt.Println("Something is wrong, but I don't know what, err: ", err)
 	}
-	go read_server_msg(conn, err)
-	send_msg(conn, err)
+	go read_server_msg(conn)
+	send_msg(conn)
 }
